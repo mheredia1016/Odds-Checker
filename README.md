@@ -70,3 +70,20 @@ COOLDOWN_MINUTES=45
 - Soccer props are not included in Phase 1 Lite because coverage and naming can vary heavily by league.
 - Add more soccer leagues only when needed.
 - If you hit rate limits, raise `PROP_POLL_SECONDS` to 600.
+
+
+## Sportsbook Filtering
+
+You can limit which sportsbooks are scanned.
+
+Example:
+
+```env
+ALLOWED_BOOKS=fanduel,draftkings,betmgm,williamhill_us,bet365,espnbet,hardrockbet
+```
+
+This helps:
+- reduce fake alerts
+- ignore small/offshore books
+- create cleaner market consensus
+- focus on books you actually use

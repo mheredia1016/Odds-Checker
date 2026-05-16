@@ -20,6 +20,7 @@ GAME_SPORT_KEYS = [x.strip() for x in os.getenv(
 
 GAME_MARKETS = [x.strip() for x in os.getenv("GAME_MARKETS", "h2h,spreads,totals").split(",") if x.strip()]
 REGIONS = os.getenv("REGIONS", "us")
+ALLOWED_BOOKS = set([x.strip().lower() for x in os.getenv("ALLOWED_BOOKS", "").split(",") if x.strip()])
 
 GAME_POLL_SECONDS = int(os.getenv("GAME_POLL_SECONDS", "60"))
 PROP_POLL_SECONDS = int(os.getenv("PROP_POLL_SECONDS", "300"))
@@ -183,6 +184,10 @@ def collect_market_prices(event, market_key):
 
     for bookmaker in event.get("bookmakers", []):
         book = bookmaker.get("title") or bookmaker.get("key")
+        book_key = (bookmaker.get("key") or "").lower()
+
+        if ALLOWED_BOOKS and book_key not in ALLOWED_BOOKS:
+            continue
 
         for market in bookmaker.get("markets", []):
             if market.get("key") != market_key:
