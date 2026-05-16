@@ -222,6 +222,26 @@ def group_game_rows(rows):
     return grouped
 
 
+def group_point_market_rows(rows):
+    """
+    For spread/total markets, do NOT group only by team/name.
+    That creates bad comparisons like Cardinals +1.5 vs Cardinals -1.5.
+
+    We group by:
+      selection/name + exact point/line
+
+    Example:
+      Cardinals -1.5 only compares to Cardinals -1.5
+      Cardinals +1.5 only compares to Cardinals +1.5
+      Over 8.5 only compares to Over 8.5
+    """
+    grouped = {}
+    for row in rows:
+        key = (row["name"], row.get("point"))
+        grouped.setdefault(key, []).append(row)
+    return grouped
+
+
 def group_prop_rows(rows):
     """
     Props need exact-ish matching:
@@ -272,24 +292,75 @@ def find_h2h_outliers(event):
 
 
 def find_point_market_outliers(event, market_key, point_threshold):
+    """
+    Spread/total outliers have two useful types:
+
+    1. Same exact line, better price:
+       Cardinals -1.5 +170 vs market +145
+
+    2. Different line, same selection, meaningful line gap:
+       Cardinals -1.5 vs market Cardinals +1.5
+
+    To avoid fake alerts, we never put opposite lines in the same Books Checked list.
+    """
     alerts = []
     rows = collect_market_prices(event, market_key)
-    grouped = group_game_rows(rows)
 
-    for selection, offers in grouped.items():
+    # Price outliers within the exact same line
+    exact_line_groups = group_point_market_rows(rows)
+
+    for (selection, point), offers in exact_line_groups.items():
         usable = [o for o in offers if o["point"] is not None]
         if len(usable) < MIN_BOOKS:
             continue
 
-        market_median_point = statistics.median([o["point"] for o in usable])
+        decimal_prices = [american_to_decimal(o["price"]) for o in usable]
+        market_median_decimal = statistics.median(decimal_prices)
+
+        for offer in usable:
+            offer_decimal = american_to_decimal(offer["price"])
+            ratio = offer_decimal / market_median_decimal if market_median_decimal else 0
+
+            # Use moneyline ratio threshold for same-line price outliers
+            if ratio >= MONEYLINE_RATIO_THRESHOLD:
+                alerts.append({
+                    "category": "game",
+                    "type": "Spread Price Outlier" if market_key == "spreads" else "Total Price Outlier",
+                    "selection": selection,
+                    "book": offer["book"],
+                    "book_key": offer["book_key"],
+                    "price": offer["price"],
+                    "point": offer["point"],
+                    "market_point": point,
+                    "market_price": decimal_to_american(market_median_decimal),
+                    "edge": f"{ratio:.2f}x payout on same line",
+                    "offers": usable,
+                })
+
+    # True line outliers by selection, shown separately and carefully
+    by_selection = group_game_rows(rows)
+
+    for selection, offers in by_selection.items():
+        usable = [o for o in offers if o["point"] is not None]
+        if len(usable) < MIN_BOOKS:
+            continue
+
+        points = [float(o["point"]) for o in usable]
+        market_median_point = statistics.median(points)
 
         for offer in usable:
             diff = abs(float(offer["point"]) - float(market_median_point))
 
             if diff >= point_threshold:
+                # Only show books on the same exact line in Books Checked if possible.
+                same_line_offers = [
+                    o for o in usable
+                    if o.get("point") == offer.get("point")
+                ]
+
                 alerts.append({
                     "category": "game",
-                    "type": "Spread Outlier" if market_key == "spreads" else "Total Outlier",
+                    "type": "Spread Line Outlier" if market_key == "spreads" else "Total Line Outlier",
                     "selection": selection,
                     "book": offer["book"],
                     "book_key": offer["book_key"],
@@ -297,7 +368,7 @@ def find_point_market_outliers(event, market_key, point_threshold):
                     "point": offer["point"],
                     "market_point": market_median_point,
                     "edge": f"{diff:.1f} pts off market",
-                    "offers": usable,
+                    "offers": same_line_offers if same_line_offers else [offer],
                 })
 
     return alerts
@@ -403,10 +474,15 @@ async def send_discord_alert(session, webhook, sport, event, alert):
         )
         color = 15158332
     else:
+        market_price_line = ""
+        if alert.get("market_price") is not None:
+            market_price_line = f'\nMarket median price: **{fmt_american(alert["market_price"])}**'
+
         main_line = (
             f'**{alert["selection"]}**\n'
             f'Outlier: **{alert["book"]} {alert["point"]} {fmt_american(alert["price"])}**\n'
-            f'Market median line: **{alert["market_point"]}**\n'
+            f'Market median line: **{alert["market_point"]}**'
+            f'{market_price_line}\n'
             f'Edge: **{alert["edge"]}**'
         )
         color = 15158332

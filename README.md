@@ -87,3 +87,16 @@ This helps:
 - ignore small/offshore books
 - create cleaner market consensus
 - focus on books you actually use
+
+
+## Patch Notes
+
+This version fixes spread/total grouping.
+
+Before:
+- Cardinals +1.5 and Cardinals -1.5 could appear in the same comparison.
+
+Now:
+- Same-line price checks compare only exact line matches.
+- Line-difference checks do not mix opposite lines in the Books Checked section.
+- Offshore/random books are still filtered by `ALLOWED_BOOKS`.
