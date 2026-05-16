@@ -38,6 +38,8 @@ COOLDOWN_MINUTES = int(os.getenv("COOLDOWN_MINUTES", "45"))
 DB_PATH = os.getenv("DB_PATH", "odds_outliers.db")
 
 API_BASE = "https://api.the-odds-api.com/v4/sports/{sport}/odds"
+EVENTS_BASE = "https://api.the-odds-api.com/v4/sports/{sport}/events"
+EVENT_ODDS_BASE = "https://api.the-odds-api.com/v4/sports/{sport}/events/{event_id}/odds"
 
 
 def now_utc():
@@ -95,6 +97,15 @@ def parse_prop_scan_config():
 
 PROP_SCAN_CONFIG = parse_prop_scan_config()
 
+def allowed_bookmakers_param():
+    """
+    The Odds API supports a bookmakers parameter. If present, it takes priority over regions.
+    This keeps random/offshore books out of the API response instead of filtering after the fact.
+    """
+    if not ALLOWED_BOOKS:
+        return None
+    return ",".join(sorted(ALLOWED_BOOKS))
+
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -143,16 +154,22 @@ def mark_alerted(alert_key):
 async def fetch_odds(session, sport, markets):
     params = {
         "apiKey": ODDS_API_KEY,
-        "regions": REGIONS,
         "markets": ",".join(markets),
         "oddsFormat": "american",
         "dateFormat": "iso",
     }
 
+    books = allowed_bookmakers_param()
+    if books:
+        params["bookmakers"] = books
+    else:
+        params["regions"] = REGIONS
+
     async with session.get(API_BASE.format(sport=sport), params=params, timeout=30) as resp:
         text = await resp.text()
         remaining = resp.headers.get("x-requests-remaining")
         used = resp.headers.get("x-requests-used")
+        last = resp.headers.get("x-requests-last")
 
         if resp.status == 429:
             print(f"[429] Rate limited | sport={sport} markets={markets} remaining={remaining} used={used}")
@@ -162,7 +179,68 @@ async def fetch_odds(session, sport, markets):
             print(f"[ERROR] sport={sport} markets={markets} HTTP {resp.status}: {text[:500]}")
             return []
 
-        print(f"[OK] sport={sport} markets={markets} remaining={remaining} used={used}")
+        print(f"[OK] game odds | sport={sport} markets={markets} remaining={remaining} used={used} last={last}")
+        return await resp.json()
+
+
+async def fetch_events(session, sport):
+    """
+    Events endpoint does not include odds and does not count against quota.
+    We use it to get event IDs, then fetch prop odds one event at a time.
+    """
+    params = {
+        "apiKey": ODDS_API_KEY,
+        "dateFormat": "iso",
+    }
+
+    async with session.get(EVENTS_BASE.format(sport=sport), params=params, timeout=30) as resp:
+        text = await resp.text()
+        if resp.status != 200:
+            print(f"[EVENTS ERROR] sport={sport} HTTP {resp.status}: {text[:500]}")
+            return []
+
+        events = await resp.json()
+        print(f"[OK] events | sport={sport} count={len(events)}")
+        return events
+
+
+async def fetch_event_prop_odds(session, sport, event_id, markets):
+    """
+    Player props must use /sports/{sport}/events/{eventId}/odds.
+    The regular /sports/{sport}/odds endpoint only supports featured markets like h2h/spreads/totals.
+    """
+    params = {
+        "apiKey": ODDS_API_KEY,
+        "markets": ",".join(markets),
+        "oddsFormat": "american",
+        "dateFormat": "iso",
+    }
+
+    books = allowed_bookmakers_param()
+    if books:
+        params["bookmakers"] = books
+    else:
+        params["regions"] = REGIONS
+
+    async with session.get(EVENT_ODDS_BASE.format(sport=sport, event_id=event_id), params=params, timeout=30) as resp:
+        text = await resp.text()
+        remaining = resp.headers.get("x-requests-remaining")
+        used = resp.headers.get("x-requests-used")
+        last = resp.headers.get("x-requests-last")
+
+        if resp.status == 429:
+            print(f"[429] Rate limited props | sport={sport} event={event_id} remaining={remaining} used={used}")
+            return None
+
+        if resp.status == 422 and "INVALID_MARKET" in text:
+            print(f"[PROP MARKET NOT AVAILABLE] sport={sport} event={event_id} markets={markets}: {text[:300]}")
+            return None
+
+        if resp.status != 200:
+            print(f"[PROP ERROR] sport={sport} event={event_id} markets={markets} HTTP {resp.status}: {text[:500]}")
+            return None
+
+        print(f"[OK] prop odds | sport={sport} event={event_id} markets={markets} remaining={remaining} used={used} last={last}")
         return await resp.json()
 
 
@@ -569,11 +647,20 @@ async def scan_game_once(session):
 
 async def scan_props_once(session):
     for sport, prop_markets in PROP_SCAN_CONFIG.items():
-        # Fetch each sport's selected prop markets together.
-        events = await fetch_odds(session, sport, prop_markets)
+        event_list = await fetch_events(session, sport)
 
-        for event in events:
-            if not game_is_within_prop_window(event):
+        # Only fetch prop odds for games close to start time.
+        target_events = [event for event in event_list if game_is_within_prop_window(event)]
+
+        print(f"[PROPS] sport={sport} target_events={len(target_events)} markets={prop_markets}")
+
+        for event_stub in target_events:
+            event_id = event_stub.get("id")
+            if not event_id:
+                continue
+
+            event = await fetch_event_prop_odds(session, sport, event_id, prop_markets)
+            if not event:
                 continue
 
             alerts = []
@@ -586,6 +673,9 @@ async def scan_props_once(session):
                     continue
                 await send_discord_alert(session, PROP_WEBHOOK, sport, event, alert)
                 mark_alerted(key)
+
+            # Tiny pause to avoid hammering event endpoints
+            await asyncio.sleep(0.35)
 
 
 async def game_loop(session):
@@ -626,6 +716,7 @@ async def main():
     print(f"Game poll seconds: {GAME_POLL_SECONDS}")
     print(f"Prop poll seconds: {PROP_POLL_SECONDS}")
     print(f"Prop window hours: {PROP_HOURS_BEFORE_GAME}")
+    print(f"Allowed books: {sorted(ALLOWED_BOOKS) if ALLOWED_BOOKS else 'ALL via region'}")
 
     async with aiohttp.ClientSession() as session:
         await asyncio.gather(

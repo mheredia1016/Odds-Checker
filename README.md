@@ -100,3 +100,37 @@ Now:
 - Same-line price checks compare only exact line matches.
 - Line-difference checks do not mix opposite lines in the Books Checked section.
 - Offshore/random books are still filtered by `ALLOWED_BOOKS`.
+
+
+## Important Prop Endpoint Fix
+
+The Odds API player props do **not** work on the regular `/sports/{sport}/odds` endpoint.
+
+Game odds use:
+
+```txt
+/v4/sports/{sport}/odds
+```
+
+Player props use:
+
+```txt
+/v4/sports/{sport}/events/{eventId}/odds
+```
+
+The bot now:
+1. Calls `/events` for each prop sport.
+2. Filters to games within `PROP_HOURS_BEFORE_GAME`.
+3. Pulls prop odds one event at a time.
+4. Scans only selected prop markets.
+
+This fixes errors like:
+
+```txt
+Markets not supported by this endpoint: player_points
+```
+
+Sources:
+- The Odds API docs say the regular odds endpoint is simpler for h2h/spreads/totals.
+- The event odds endpoint accepts all available market keys.
+- The betting markets page says player props are accessed one event at a time.
