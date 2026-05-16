@@ -371,24 +371,27 @@ def find_h2h_outliers(event):
 
 def find_point_market_outliers(event, market_key, point_threshold):
     """
-    Spread/total outliers have two useful types:
+    Phase 1 clean mode:
+    Spreads/totals ONLY alert on same exact line price differences.
 
-    1. Same exact line, better price:
-       Cardinals -1.5 +170 vs market +145
+    Good:
+      Cardinals -1.5 +240 at one book
+      Cardinals -1.5 +165 / +170 / +160 at other books
 
-    2. Different line, same selection, meaningful line gap:
-       Cardinals -1.5 vs market Cardinals +1.5
+    Bad/no alert:
+      Cardinals -1.5 compared against Cardinals +1.5
 
-    To avoid fake alerts, we never put opposite lines in the same Books Checked list.
+    Also requires MIN_BOOKS books on that exact same line.
     """
     alerts = []
     rows = collect_market_prices(event, market_key)
-
-    # Price outliers within the exact same line
     exact_line_groups = group_point_market_rows(rows)
 
     for (selection, point), offers in exact_line_groups.items():
         usable = [o for o in offers if o["point"] is not None]
+
+        # This is the important fix:
+        # If only one book has this exact line, there is no comparison.
         if len(usable) < MIN_BOOKS:
             continue
 
@@ -399,7 +402,6 @@ def find_point_market_outliers(event, market_key, point_threshold):
             offer_decimal = american_to_decimal(offer["price"])
             ratio = offer_decimal / market_median_decimal if market_median_decimal else 0
 
-            # Use moneyline ratio threshold for same-line price outliers
             if ratio >= MONEYLINE_RATIO_THRESHOLD:
                 alerts.append({
                     "category": "game",
@@ -411,42 +413,8 @@ def find_point_market_outliers(event, market_key, point_threshold):
                     "point": offer["point"],
                     "market_point": point,
                     "market_price": decimal_to_american(market_median_decimal),
-                    "edge": f"{ratio:.2f}x payout on same line",
+                    "edge": f"{ratio:.2f}x payout on same exact line",
                     "offers": usable,
-                })
-
-    # True line outliers by selection, shown separately and carefully
-    by_selection = group_game_rows(rows)
-
-    for selection, offers in by_selection.items():
-        usable = [o for o in offers if o["point"] is not None]
-        if len(usable) < MIN_BOOKS:
-            continue
-
-        points = [float(o["point"]) for o in usable]
-        market_median_point = statistics.median(points)
-
-        for offer in usable:
-            diff = abs(float(offer["point"]) - float(market_median_point))
-
-            if diff >= point_threshold:
-                # Only show books on the same exact line in Books Checked if possible.
-                same_line_offers = [
-                    o for o in usable
-                    if o.get("point") == offer.get("point")
-                ]
-
-                alerts.append({
-                    "category": "game",
-                    "type": "Spread Line Outlier" if market_key == "spreads" else "Total Line Outlier",
-                    "selection": selection,
-                    "book": offer["book"],
-                    "book_key": offer["book_key"],
-                    "price": offer["price"],
-                    "point": offer["point"],
-                    "market_point": market_median_point,
-                    "edge": f"{diff:.1f} pts off market",
-                    "offers": same_line_offers if same_line_offers else [offer],
                 })
 
     return alerts

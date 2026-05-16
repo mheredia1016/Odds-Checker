@@ -134,3 +134,35 @@ Sources:
 - The Odds API docs say the regular odds endpoint is simpler for h2h/spreads/totals.
 - The event odds endpoint accepts all available market keys.
 - The betting markets page says player props are accessed one event at a time.
+
+
+## Same-Line Only Patch
+
+This version removes noisy spread/total line-difference alerts.
+
+Now spreads and totals only alert when:
+
+```txt
+same team/side
+same exact line
+at least MIN_BOOKS books
+one book has a much better price
+```
+
+Example valid alert:
+
+```txt
+Cardinals -1.5 +240
+vs
+Cardinals -1.5 +165 / +170 / +160 / +155
+```
+
+Example ignored:
+
+```txt
+Cardinals -1.5 +165
+vs
+Cardinals +1.5 -190
+```
+
+If only one book has the exact line, it will not alert.
