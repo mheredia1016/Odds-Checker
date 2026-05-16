@@ -1,168 +1,20 @@
-# Odds Outlier Discord Bot — Phase 1 Lite
+# SportsGameOdds Odds Outlier Bot
 
-This is the credit-safer version.
+Uses `GET https://api.sportsgameodds.com/v2/events`.
 
-It scans:
+SportsGameOdds response structure:
+- main data is in `data`
+- event odds are in `event.odds`
+- bookmaker odds are in `odds.<oddID>.byBookmaker.<bookmakerID>`
+- oddID format is `{statID}-{statEntityID}-{periodID}-{betTypeID}-{sideID}`
 
-## Game Odds
-Every 60 seconds:
-- NBA
-- WNBA
-- MLB
-- NHL
-- EPL
-- MLS
+Railway variables are listed in `.env.example`.
 
-Markets:
-- Moneyline
-- Spreads
-- Totals
-
-## Player Props
-Every 5 minutes:
-- NBA player points
-- NBA threes
-- WNBA player points
-- WNBA threes
-- MLB batter home runs
-- NHL shots on goal
-
-Props are only scanned within 4 hours of game start by default.
-
-## Why this version
-
-The Odds API can burn credits quickly if you scan every sport, every market, every player prop, every minute.
-
-This version separates:
-
-```txt
-game odds: faster
-player props: slower and selective
-```
-
-## Railway setup
-
-Upload this repo to Railway and set these variables:
-
-```env
-ODDS_API_KEY=
-GAME_DISCORD_WEBHOOK_URL=
-PROP_DISCORD_WEBHOOK_URL=
-GAME_SPORT_KEYS=basketball_nba,basketball_wnba,baseball_mlb,icehockey_nhl,soccer_epl,soccer_usa_mls
-GAME_MARKETS=h2h,spreads,totals
-PROP_SCAN_CONFIG=basketball_nba:player_points|player_threes;basketball_wnba:player_points|player_threes;baseball_mlb:batter_home_runs;icehockey_nhl:player_shots_on_goal
-REGIONS=us
-GAME_POLL_SECONDS=60
-PROP_POLL_SECONDS=300
-PROP_HOURS_BEFORE_GAME=4
-MIN_BOOKS=4
-MONEYLINE_RATIO_THRESHOLD=1.50
-SPREAD_POINT_DIFF_THRESHOLD=2.0
-TOTAL_POINT_DIFF_THRESHOLD=2.0
-PROP_MIN_BOOKS=4
-PROP_RATIO_THRESHOLD=1.60
-COOLDOWN_MINUTES=45
-```
-
-## Notes
-
-- Leave `PROP_DISCORD_WEBHOOK_URL` blank if you want prop alerts to go to the game odds channel.
-- Soccer props are not included in Phase 1 Lite because coverage and naming can vary heavily by league.
-- Add more soccer leagues only when needed.
-- If you hit rate limits, raise `PROP_POLL_SECONDS` to 600.
-
-
-## Sportsbook Filtering
-
-You can limit which sportsbooks are scanned.
-
-Example:
-
-```env
-ALLOWED_BOOKS=fanduel,draftkings,betmgm,williamhill_us,bet365,espnbet,hardrockbet
-```
-
-This helps:
-- reduce fake alerts
-- ignore small/offshore books
-- create cleaner market consensus
-- focus on books you actually use
-
-
-## Patch Notes
-
-This version fixes spread/total grouping.
-
-Before:
-- Cardinals +1.5 and Cardinals -1.5 could appear in the same comparison.
-
-Now:
-- Same-line price checks compare only exact line matches.
-- Line-difference checks do not mix opposite lines in the Books Checked section.
-- Offshore/random books are still filtered by `ALLOWED_BOOKS`.
-
-
-## Important Prop Endpoint Fix
-
-The Odds API player props do **not** work on the regular `/sports/{sport}/odds` endpoint.
-
-Game odds use:
-
-```txt
-/v4/sports/{sport}/odds
-```
-
-Player props use:
-
-```txt
-/v4/sports/{sport}/events/{eventId}/odds
-```
-
-The bot now:
-1. Calls `/events` for each prop sport.
-2. Filters to games within `PROP_HOURS_BEFORE_GAME`.
-3. Pulls prop odds one event at a time.
-4. Scans only selected prop markets.
-
-This fixes errors like:
-
-```txt
-Markets not supported by this endpoint: player_points
-```
-
-Sources:
-- The Odds API docs say the regular odds endpoint is simpler for h2h/spreads/totals.
-- The event odds endpoint accepts all available market keys.
-- The betting markets page says player props are accessed one event at a time.
-
-
-## Same-Line Only Patch
-
-This version removes noisy spread/total line-difference alerts.
-
-Now spreads and totals only alert when:
-
-```txt
-same team/side
-same exact line
-at least MIN_BOOKS books
-one book has a much better price
-```
-
-Example valid alert:
-
-```txt
-Cardinals -1.5 +240
-vs
-Cardinals -1.5 +165 / +170 / +160 / +155
-```
-
-Example ignored:
-
-```txt
-Cardinals -1.5 +165
-vs
-Cardinals +1.5 -190
-```
-
-If only one book has the exact line, it will not alert.
+This bot:
+- filters sportsbooks with `ALLOWED_BOOKS`
+- scans NBA, MLB, NHL, EPL, MLS, WNBA
+- checks moneyline, spread, total, and selected props
+- requires `MIN_BOOKS` before alerting
+- compares spreads/totals/props only on the same exact line
+- sends Discord webhook alerts
+- includes deeplinks when SGO provides them

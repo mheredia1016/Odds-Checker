@@ -1,1 +1,1 @@
-worker: python odds_outlier_bot.py
+worker: python sgo_odds_outlier_bot.py
